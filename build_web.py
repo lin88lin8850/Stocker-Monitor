@@ -1,46 +1,71 @@
 import datetime as dt
+import html
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
-from utils import COMPANY_SYMBOLS, FOCUS_METRICS, METRIC_LABELS
+from dashboard_core import (
+    build_detail_table,
+    build_metric_df,
+    build_metric_plot,
+    build_metric_table,
+    get_available_value_columns,
+    get_metrics,
+    prepare_dashboard_data,
+    validate_required_columns,
+)
+from utils import COMPANY_SYMBOLS, VALUE_LABELS
 
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("docs")
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
-REQUIRED_COLUMNS = {
-    "report_date",
-    "report_name",
-    "report_period",
-    "quarter_name",
-    "metric_name",
-    "value",
-}
-TABLE_COLUMNS = ["report_date", "report_name", "metric_name_cn", "metric_name", "value"]
 BASE_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>价值投资财务指标网页看板</title>
+  <title>财务指标看板</title>
   <style>
     body {{
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0 auto;
-      padding: 24px;
-      max-width: 1280px;
+      margin: 0;
+      padding: 0;
       line-height: 1.6;
       color: #1f2937;
+      background: #f5f7fb;
     }}
-    h1, h2 {{
+    h1, h2, h3 {{
       margin-top: 0;
     }}
+    .layout {{
+      display: grid;
+      grid-template-columns: 250px 1fr;
+      min-height: 100vh;
+    }}
+    .sidebar {{
+      background: #ffffff;
+      border-right: 1px solid #e5e7eb;
+      padding: 20px 14px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }}
+    .content {{
+      padding: 24px;
+      width: 100%;
+      box-sizing: border-box;
+    }}
+    .sidebar h3 {{
+      font-size: 16px;
+      margin-bottom: 10px;
+    }}
     section {{
-      margin: 32px 0;
+      margin: 0 0 24px 0;
       padding: 20px;
       border: 1px solid #e5e7eb;
       border-radius: 8px;
       background: #fff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     }}
     .table {{
       border-collapse: collapse;
@@ -59,12 +84,125 @@ BASE_HTML = """<!doctype html>
       color: #6b7280;
       font-size: 14px;
     }}
+    .companies {{
+      display: grid;
+      gap: 8px;
+      margin-bottom: 16px;
+    }}
+    .company-btn {{
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #111827;
+      border-radius: 6px;
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 14px;
+      text-align: left;
+    }}
+    .company-btn.active {{
+      border-color: #2563eb;
+      color: #fff;
+      background: #2563eb;
+    }}
+    .combo-section {{
+      display: none;
+    }}
+    .combo-section.active {{
+      display: block;
+    }}
+    .metric-block {{
+      margin-top: 20px;
+      padding-top: 8px;
+      border-top: 1px dashed #e5e7eb;
+    }}
+    #valueDimension {{
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 8px;
+      background: #fff;
+      margin-bottom: 8px;
+    }}
+    .expander {{
+      margin-top: 16px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px 12px;
+    }}
+    .expander summary {{
+      cursor: pointer;
+      font-weight: 600;
+      color: #374151;
+    }}
+    @media (max-width: 900px) {{
+      .layout {{
+        grid-template-columns: 1fr;
+      }}
+      .sidebar {{
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid #e5e7eb;
+      }}
+    }}
   </style>
 </head>
 <body>
-  <h1>价值投资财务指标网页看板</h1>
-  <p class="meta">自动生成时间: {generated_at}</p>
-  {sections}
+  <div class="layout">
+    <aside class="sidebar">
+      <h3>公司</h3>
+      <div class="companies">
+          {company_buttons}
+      </div>
+      <label for="valueDimension"><strong>选择数值维度</strong></label>
+      <select id="valueDimension">
+          {value_options}
+      </select>
+    </aside>
+    <main class="content">
+      <h1>💹 核心公司财务指标监控看板</h1>
+      <p class="meta">自动生成时间: {generated_at}</p>
+      {sections}
+    </main>
+  </div>
+  <script>
+    const companyButtons = Array.from(document.querySelectorAll('.company-btn'));
+    const valueSelect = document.getElementById('valueDimension');
+    const sections = Array.from(document.querySelectorAll('.combo-section'));
+
+    function activeCompany() {{
+      const active = companyButtons.find(btn => btn.classList.contains('active'));
+      return active ? active.dataset.company : null;
+    }}
+
+    function refreshView() {{
+      const company = activeCompany();
+      let value = valueSelect.value;
+      const availableValues = sections
+        .filter(section => section.dataset.company === company)
+        .map(section => section.dataset.value);
+      if (availableValues.length > 0 && !availableValues.includes(value)) {{
+        value = availableValues[0];
+        valueSelect.value = value;
+      }}
+      sections.forEach(section => {{
+        const show = section.dataset.company === company && section.dataset.value === value;
+        section.classList.toggle('active', show);
+      }});
+    }}
+
+    companyButtons.forEach(btn => {{
+      btn.addEventListener('click', () => {{
+        companyButtons.forEach(item => item.classList.remove('active'));
+        btn.classList.add('active');
+        refreshView();
+      }});
+    }});
+
+    valueSelect.addEventListener('change', refreshView);
+    refreshView();
+  </script>
 </body>
 </html>
 """
@@ -75,82 +213,112 @@ def get_display_name(company_name: str) -> str:
     return f"{company_name} ({symbol})" if symbol else company_name
 
 
-def load_and_prepare_data(csv_file: Path) -> tuple[pd.DataFrame, str, set[str]]:
-    # Normalize source data once so charts/table share the same filtered frame.
+def load_company_data(csv_file: Path) -> tuple[pd.DataFrame, str, list[str]]:
     df = pd.read_csv(csv_file)
-    missing_columns = REQUIRED_COLUMNS - set(df.columns)
-
-    if missing_columns:
-        return df, get_display_name(csv_file.stem), missing_columns
-
-    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
-    df = df.dropna(subset=["report_date", "metric_name", "value"])
-    df = df[df["report_name"].astype(str).str.contains("年报", na=False)]
-    df = df[df["metric_name"].isin(FOCUS_METRICS)]
-    df["metric_name_cn"] = df["metric_name"].map(lambda x: METRIC_LABELS.get(x, x))
-    return df, get_display_name(csv_file.stem), set()
+    return df, get_display_name(csv_file.stem), validate_required_columns(df)
 
 
-def build_trend_chart(df: pd.DataFrame, display_name: str) -> str:
-    fig = px.line(
-        df.sort_values("report_date"),
-        x="report_date",
-        y="value",
-        color="metric_name_cn",
-        markers=True,
-        title=f"{display_name} 财务指标趋势",
-        template="plotly_white",
-        hover_data=["report_name", "report_period", "quarter_name", "metric_name"],
-        labels={
-            "report_date": "报告日期",
-            "value": "报告期数值",
-            "metric_name_cn": "指标名",
-            "metric_name": "英文变量",
-        },
-    )
-    fig.update_layout(legend_title="指标名", hovermode="x unified")
-    return fig.to_html(full_html=False, include_plotlyjs="cdn")
+def build_metric_block(df: pd.DataFrame, metrics: list[str], value_column: str) -> str:
+    value_label = VALUE_LABELS.get(value_column, value_column)
+    chart_blocks: list[str] = []
+    table_frames: list[pd.DataFrame] = []
 
-
-def build_latest_table(df: pd.DataFrame) -> str:
-    latest_rows = (
-        df.sort_values("report_date", ascending=False).head(20)[TABLE_COLUMNS].copy()
-    )
-    latest_rows["report_date"] = latest_rows["report_date"].dt.strftime("%Y-%m-%d")
-    latest_rows = latest_rows.rename(
-        columns={
-            "report_date": "报告日期",
-            "report_name": "报告名称",
-            "metric_name_cn": "指标中文名",
-            "metric_name": "指标英文变量",
-            "value": "报告期数值",
-        }
-    )
-    return latest_rows.to_html(index=False, classes="table", border=0)
-
-
-def build_company_section(csv_file: Path) -> str:
-    df, display_name, missing_columns = load_and_prepare_data(csv_file)
-    if missing_columns:
-        return (
-            f"<section><h2>{display_name}</h2>"
-            f"<p>缺少字段: {', '.join(sorted(missing_columns))}</p></section>"
+    for metric in metrics:
+        metric_df = build_metric_df(df, metric, value_column)
+        if metric_df.empty:
+            continue
+        fig = build_metric_plot(metric_df, metric, value_label, value_column)
+        chart_blocks.append(fig.to_html(full_html=False, include_plotlyjs="cdn"))
+        table_frames.append(
+            build_metric_table(metric_df, metric, value_label, value_column)
         )
 
-    if df.empty:
-        return (
-            f"<section><h2>{display_name}</h2>" "<p>数据为空，无法绘图。</p></section>"
-        )
+    if not chart_blocks:
+        return ""
 
-    chart_html = build_trend_chart(df, display_name)
-    table_html = build_latest_table(df)
+    detail_df = build_detail_table(table_frames, metrics)
+    table_html = detail_df.to_html(index=False, classes="table", border=0)
+    return (
+        f"<div class='metric-block'>"
+        f"{''.join(chart_blocks)}"
+        "<details class='expander'>"
+        "<summary>点击查看全部指标明细</summary>"
+        f"{table_html}</details></div>"
+    )
+
+
+def build_combo_section(
+    company_name: str, display_name: str, df: pd.DataFrame, value_column: str
+) -> str:
+    metrics = get_metrics(df)
+    if not metrics:
+        return ""
+
+    metric_block = build_metric_block(df, metrics, value_column)
+    if not metric_block:
+        return ""
 
     return (
-        f"<section><h2>{display_name}</h2>"
-        f"{chart_html}"
-        "<h3>最新 20 条数据</h3>"
-        f"{table_html}</section>"
+        f"<section class='combo-section' data-company='{html.escape(company_name)}' "
+        f"data-value='{html.escape(value_column)}'>"
+        f"<h2>{display_name}</h2>{metric_block}</section>"
     )
+
+
+def build_company_sections(
+    csv_file: Path,
+) -> tuple[list[str], str, list[str], str]:
+    raw_df, display_name, missing_columns = load_company_data(csv_file)
+    company_name = csv_file.stem
+    if missing_columns:
+        return (
+            [],
+            display_name,
+            [],
+            f"<section><h2>{display_name}</h2><p>缺少字段: {', '.join(sorted(missing_columns))}</p></section>",
+        )
+
+    df = prepare_dashboard_data(raw_df)
+    if df.empty:
+        return (
+            [],
+            display_name,
+            [],
+            f"<section><h2>{display_name}</h2><p>数据为空，无法绘图。</p></section>",
+        )
+
+    metrics = get_metrics(df)
+    if not metrics:
+        return (
+            [],
+            display_name,
+            [],
+            f"<section><h2>{display_name}</h2><p>当前公司在目标指标列表中没有可展示数据。</p></section>",
+        )
+
+    value_columns = get_available_value_columns(df, metrics)
+    if not value_columns:
+        return (
+            [],
+            display_name,
+            [],
+            f"<section><h2>{display_name}</h2><p>当前指标没有可展示的数值维度。</p></section>",
+        )
+
+    sections = [
+        build_combo_section(company_name, display_name, df, value_column)
+        for value_column in value_columns
+    ]
+    sections = [section for section in sections if section]
+    if not sections:
+        return (
+            [],
+            display_name,
+            [],
+            f"<section><h2>{display_name}</h2><p>当前数值维度下暂无可展示图表。</p></section>",
+        )
+
+    return sections, display_name, value_columns, ""
 
 
 def main() -> None:
@@ -164,11 +332,57 @@ def main() -> None:
         )
         return
 
-    sections = [build_company_section(csv_file) for csv_file in csv_files]
+    all_sections: list[str] = []
+    fallback_sections: list[str] = []
+    company_names: list[str] = []
+    company_labels: dict[str, str] = {}
+    all_value_columns: set[str] = set()
+
+    for csv_file in csv_files:
+        sections, display_name, value_columns, fallback = build_company_sections(
+            csv_file
+        )
+        company_name = csv_file.stem
+        company_names.append(company_name)
+        company_labels[company_name] = display_name
+        all_value_columns.update(value_columns)
+        all_sections.extend(sections)
+        if fallback:
+            fallback_sections.append(fallback)
+
+    if not all_sections:
+        all_sections = fallback_sections
+
+    default_company = company_names[0] if company_names else ""
+    ordered_value_columns = [
+        value_column
+        for value_column in ["value", "yoy"]
+        if value_column in all_value_columns
+    ]
+    if not ordered_value_columns:
+        ordered_value_columns = sorted(all_value_columns) or ["value"]
+
+    company_buttons = "".join(
+        f"<button class='company-btn{' active' if company_name == default_company else ''}' "
+        f"data-company='{html.escape(company_name)}'>"
+        f"{html.escape(company_labels[company_name])}</button>"
+        for company_name in company_names
+    )
+    value_options = "".join(
+        f"<option value='{html.escape(value_column)}'>"
+        f"{html.escape(VALUE_LABELS.get(value_column, value_column))}</option>"
+        for value_column in ordered_value_columns
+    )
+
     generated_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    html = BASE_HTML.format(generated_at=generated_at, sections="".join(sections))
-    OUTPUT_FILE.write_text(html, encoding="utf-8")
+    html_output = BASE_HTML.format(
+        generated_at=generated_at,
+        company_buttons=company_buttons,
+        value_options=value_options,
+        sections="".join(all_sections),
+    )
+    OUTPUT_FILE.write_text(html_output, encoding="utf-8")
     print(f"网页已生成: {OUTPUT_FILE}")
 
 
