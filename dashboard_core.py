@@ -16,6 +16,8 @@ PERCENT_VALUE_METRICS = {"assets_debt_ratio", "index_weighted_avg_roe"}
 VALUE_UNIT_METRICS = {
     "inventory_turnover_days": "天",
     "basic_eps": "元",
+    "pe_ttm": "倍",
+    "pb": "倍",
 }
 
 
@@ -99,7 +101,7 @@ def build_metric_plot(metric_df: pd.DataFrame, metric: str, value_label: str, va
         x="report_date",
         y=plot_y_column,
         markers=True,
-        title=METRIC_LABELS.get(metric, metric),
+        title=f"<b>{METRIC_LABELS.get(metric, metric)}</b>",
         template="plotly_white",
         hover_data=["report_name"],
         labels={plot_y_column: display_value_label},

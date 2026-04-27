@@ -21,11 +21,23 @@ DATA_DIR = "data"
 
 
 def list_company_names() -> list[str]:
-    data_files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith(".csv")])
+    data_files = [f for f in os.listdir(DATA_DIR) if f.endswith(".csv")]
     if not data_files:
         st.error("未在 data 目录找到 CSV 数据文件。")
         st.stop()
-    return [f.replace(".csv", "") for f in data_files]
+
+    existing_companies = {f.replace(".csv", "") for f in data_files}
+    ordered_companies = [
+        company for company in COMPANY_SYMBOLS.keys() if company in existing_companies
+    ]
+    # Keep backward compatibility for CSV files not listed in config.
+    extra_companies = sorted(existing_companies - set(ordered_companies))
+    return ordered_companies + extra_companies
+
+
+def is_hk_company(company_name: str) -> bool:
+    symbol = str(COMPANY_SYMBOLS.get(company_name, "")).upper()
+    return symbol.startswith("HK")
 
 
 def select_company(company_names: list[str]) -> str:
@@ -37,13 +49,34 @@ def select_company(company_names: list[str]) -> str:
         st.session_state["selected_company_name"] = company_names[0]
 
     st.sidebar.subheader("公司")
-    default_idx = company_names.index(st.session_state["selected_company_name"])
+    a_share_companies = [name for name in company_names if not is_hk_company(name)]
+    hk_companies = [name for name in company_names if is_hk_company(name)]
+    market_options = []
+    if a_share_companies:
+        market_options.append("A股")
+    if hk_companies:
+        market_options.append("港股")
+
+    selected_company = st.session_state["selected_company_name"]
+    default_market = "港股" if is_hk_company(selected_company) else "A股"
+    if default_market not in market_options:
+        default_market = market_options[0]
+
+    selected_market = st.sidebar.radio(
+        "市场",
+        market_options,
+        index=market_options.index(default_market),
+        horizontal=True,
+    )
+    candidates = hk_companies if selected_market == "港股" else a_share_companies
+    default_idx = candidates.index(selected_company) if selected_company in candidates else 0
     selected_company = st.sidebar.radio(
-        "选择公司",
-        company_names,
+        f"{selected_market}公司",
+        candidates,
         index=default_idx,
         label_visibility="collapsed",
     )
+
     st.session_state["selected_company_name"] = selected_company
     return selected_company
 

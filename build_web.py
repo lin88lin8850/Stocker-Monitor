@@ -89,6 +89,15 @@ BASE_HTML = """<!doctype html>
       gap: 8px;
       margin-bottom: 16px;
     }}
+    .market-group {{
+      margin-bottom: 14px;
+    }}
+    .market-title {{
+      font-size: 13px;
+      color: #6b7280;
+      margin: 0 0 6px 0;
+      font-weight: 600;
+    }}
     .company-btn {{
       border: 1px solid #d1d5db;
       background: #fff;
@@ -152,9 +161,7 @@ BASE_HTML = """<!doctype html>
   <div class="layout">
     <aside class="sidebar">
       <h3>公司</h3>
-      <div class="companies">
-          {company_buttons}
-      </div>
+      {company_groups}
       <label for="valueDimension"><strong>选择数值维度</strong></label>
       <select id="valueDimension">
           {value_options}
@@ -323,7 +330,14 @@ def build_company_sections(
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
+    csv_map = {csv_file.stem: csv_file for csv_file in DATA_DIR.glob("*.csv")}
+    csv_files = [
+        csv_map[company] for company in COMPANY_SYMBOLS.keys() if company in csv_map
+    ]
+    extra_files = sorted(
+        [csv_file for name, csv_file in csv_map.items() if name not in COMPANY_SYMBOLS]
+    )
+    csv_files.extend(extra_files)
 
     if not csv_files:
         OUTPUT_FILE.write_text(
@@ -362,12 +376,41 @@ def main() -> None:
     if not ordered_value_columns:
         ordered_value_columns = sorted(all_value_columns) or ["value"]
 
-    company_buttons = "".join(
-        f"<button class='company-btn{' active' if company_name == default_company else ''}' "
-        f"data-company='{html.escape(company_name)}'>"
-        f"{html.escape(company_labels[company_name])}</button>"
+    a_share_names = [
+        company_name
         for company_name in company_names
-    )
+        if not str(COMPANY_SYMBOLS.get(company_name, "")).upper().startswith("HK")
+    ]
+    hk_names = [
+        company_name
+        for company_name in company_names
+        if str(COMPANY_SYMBOLS.get(company_name, "")).upper().startswith("HK")
+    ]
+
+    def render_company_buttons(names: list[str]) -> str:
+        return "".join(
+            f"<button class='company-btn{' active' if company_name == default_company else ''}' "
+            f"data-company='{html.escape(company_name)}'>"
+            f"{html.escape(company_labels[company_name])}</button>"
+            for company_name in names
+        )
+
+    company_groups_parts = []
+    if a_share_names:
+        company_groups_parts.append(
+            "<div class='market-group'>"
+            "<div class='market-title'>A股</div>"
+            f"<div class='companies'>{render_company_buttons(a_share_names)}</div>"
+            "</div>"
+        )
+    if hk_names:
+        company_groups_parts.append(
+            "<div class='market-group'>"
+            "<div class='market-title'>港股</div>"
+            f"<div class='companies'>{render_company_buttons(hk_names)}</div>"
+            "</div>"
+        )
+    company_groups = "".join(company_groups_parts)
     value_options = "".join(
         f"<option value='{html.escape(value_column)}'>"
         f"{html.escape(VALUE_LABELS.get(value_column, value_column))}</option>"
@@ -378,7 +421,7 @@ def main() -> None:
 
     html_output = BASE_HTML.format(
         generated_at=generated_at,
-        company_buttons=company_buttons,
+        company_groups=company_groups,
         value_options=value_options,
         sections="".join(all_sections),
     )

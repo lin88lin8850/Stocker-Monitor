@@ -1,6 +1,11 @@
 COMPANY_SYMBOLS = {
     "贵州茅台": "600519",
     "长江电力": "600900",
+    "羚锐制药": "600285",
+    "中金黄金": "600489",
+    "京东方A": "000725",
+    "泡泡玛特": "HK9992",
+    "小米集团": "HK1810",
 }
 
 METRIC_LABELS = {
@@ -28,6 +33,8 @@ METRIC_LABELS = {
     "assets_debt_ratio": "资产负债率",
     "index_deduct_holder_net_profit": "扣非归母净利润",
     "index_weighted_avg_roe": "加权平均净资产收益率",
+    "pe_ttm": "市盈率(PE-TTM)",
+    "pb": "市净率(PB)",
 }
 
 VALUE_LABELS = {
@@ -39,8 +46,10 @@ VALUE_LABELS = {
 }
 
 FOCUS_METRICS = [
-    "parent_holder_net_profit",
     "operating_income_total",
+    "parent_holder_net_profit",
+    "pe_ttm",
+    "pb",
     "basic_eps",
     "assets_debt_ratio",
     "index_weighted_avg_roe",
