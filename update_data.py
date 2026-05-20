@@ -2,6 +2,7 @@ import akshare as ak
 import pandas as pd
 import os
 import smtplib
+import requests
 
 from email.mime.text import MIMEText
 from email.header import Header
@@ -44,15 +45,30 @@ def report_labels_from_date(report_date: pd.Timestamp) -> tuple[str, str, str]:
 
 def fetch_hk_financial_long(symbol: str) -> pd.DataFrame:
     hk_symbol = normalize_symbol(symbol)
-    hk_df = ak.stock_financial_hk_analysis_indicator_em(
-        symbol=hk_symbol, indicator="报告期"
-    )
-    if hk_df.empty:
-        return hk_df
 
+    # 东财港股财务指标接口对 "报告期" 仅返回最近 9 个季度（约两年），对 "年度" 返回最近 9 个年报。
+    # 同时拉两种再按 REPORT_DATE 去重，既能拿到完整的年报历史，又能补上当年的最新季报。
+    frames: list[pd.DataFrame] = []
+    for indicator in ("年度", "报告期"):
+        try:
+            partial_df = ak.stock_financial_hk_analysis_indicator_em(
+                symbol=hk_symbol, indicator=indicator
+            )
+        except Exception as exc:
+            print(f"港股财务指标拉取失败 ({hk_symbol}, {indicator}): {exc}")
+            continue
+        if partial_df is not None and not partial_df.empty:
+            frames.append(partial_df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    hk_df = pd.concat(frames, ignore_index=True)
     hk_df["REPORT_DATE"] = pd.to_datetime(hk_df["REPORT_DATE"], errors="coerce")
-    hk_df = hk_df.dropna(subset=["REPORT_DATE"]).sort_values(
-        "REPORT_DATE", ascending=False
+    hk_df = (
+        hk_df.dropna(subset=["REPORT_DATE"])
+        .drop_duplicates(subset=["REPORT_DATE"], keep="first")
+        .sort_values("REPORT_DATE", ascending=False)
     )
 
     metric_mapping = [
@@ -124,30 +140,100 @@ def fetch_financial_data(symbol: str) -> pd.DataFrame:
     )
 
 
+def _fetch_hk_baidu_indicator(symbol: str, indicator: str) -> pd.DataFrame:
+    # akshare 自带的 stock_hk_valuation_baidu 使用 http.client 且不跟随 301 重定向，
+    # 该接口已迁移至 finance.baidu.com，所以这里用 requests 直连并允许重定向。
+    url = "https://gushitong.baidu.com/opendata"
+    params = {
+        "openapi": "1",
+        "dspName": "iphone",
+        "tn": "tangram",
+        "client": "app",
+        "query": indicator,
+        "code": symbol,
+        "word": "",
+        "resource_id": "51171",
+        "market": "hk",
+        "tag": indicator,
+        "chart_select": "全部",
+        "industry_select": "",
+        "skip_industry": "1",
+        "finClientType": "pc",
+    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(
+        url, params=params, headers=headers, allow_redirects=True, timeout=20
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload["Result"][0]["DisplayData"]["resultData"]["tplData"]["result"][
+        "chartInfo"
+    ][0]["body"]
+    df = pd.DataFrame(rows, columns=["date", "value"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    return df.dropna(subset=["date"])
+
+
 def fetch_valuation_history(symbol: str) -> pd.DataFrame:
-    if is_hk_symbol(symbol) and hasattr(ak, "stock_hk_indicator_eniu"):
+    if is_hk_symbol(symbol):
+        hk_symbol = normalize_symbol(symbol)
         try:
-            hk_symbol = f"hk{normalize_symbol(symbol)}"
-            pe_df = ak.stock_hk_indicator_eniu(symbol=hk_symbol, indicator="市盈率")
-            pb_df = ak.stock_hk_indicator_eniu(symbol=hk_symbol, indicator="市净率")
-            pe_df = pe_df.rename(columns={"date": "trade_date", "pe": "pe_ttm"})
-            pb_df = pb_df.rename(columns={"date": "trade_date", "pb": "pb"})
-            pe_df["trade_date"] = pd.to_datetime(pe_df["trade_date"], errors="coerce")
-            pb_df["trade_date"] = pd.to_datetime(pb_df["trade_date"], errors="coerce")
-            pe_df = pe_df.dropna(subset=["trade_date"]).sort_values("trade_date")
-            pb_df = pb_df.dropna(subset=["trade_date"]).sort_values("trade_date")
+            pe_df = _fetch_hk_baidu_indicator(hk_symbol, "市盈率(TTM)").rename(
+                columns={"date": "trade_date", "value": "pe_ttm"}
+            )
+            pb_df = _fetch_hk_baidu_indicator(hk_symbol, "市净率").rename(
+                columns={"date": "trade_date", "value": "pb"}
+            )
+            pe_df = pe_df.sort_values("trade_date")
+            pb_df = pb_df.sort_values("trade_date")
             merged_df = pd.merge_asof(
                 pe_df[["trade_date", "pe_ttm"]],
                 pb_df[["trade_date", "pb"]],
                 on="trade_date",
                 direction="nearest",
-                tolerance=pd.Timedelta(days=7),
+                tolerance=pd.Timedelta(days=14),
             )
             merged_df = merged_df.dropna(subset=["pe_ttm", "pb"])
             if not merged_df.empty:
                 return merged_df
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"百度港股估值接口失败 ({symbol}): {exc}")
+
+        # 备用方案: eniu 接口，但数据自 2022-07-13 起停止更新，仅作为兜底。
+        if hasattr(ak, "stock_hk_indicator_eniu"):
+            try:
+                eniu_symbol = f"hk{normalize_symbol(symbol)}"
+                pe_df = ak.stock_hk_indicator_eniu(
+                    symbol=eniu_symbol, indicator="市盈率"
+                )
+                pb_df = ak.stock_hk_indicator_eniu(
+                    symbol=eniu_symbol, indicator="市净率"
+                )
+                pe_df = pe_df.rename(columns={"date": "trade_date", "pe": "pe_ttm"})
+                pb_df = pb_df.rename(columns={"date": "trade_date", "pb": "pb"})
+                pe_df["trade_date"] = pd.to_datetime(
+                    pe_df["trade_date"], errors="coerce"
+                )
+                pb_df["trade_date"] = pd.to_datetime(
+                    pb_df["trade_date"], errors="coerce"
+                )
+                pe_df = pe_df.dropna(subset=["trade_date"]).sort_values("trade_date")
+                pb_df = pb_df.dropna(subset=["trade_date"]).sort_values("trade_date")
+                merged_df = pd.merge_asof(
+                    pe_df[["trade_date", "pe_ttm"]],
+                    pb_df[["trade_date", "pb"]],
+                    on="trade_date",
+                    direction="nearest",
+                    tolerance=pd.Timedelta(days=7),
+                )
+                merged_df = merged_df.dropna(subset=["pe_ttm", "pb"])
+                if not merged_df.empty:
+                    return merged_df
+            except Exception:
+                pass
+
+        return pd.DataFrame()
 
     if hasattr(ak, "stock_zh_valuation_baidu"):
         try:
@@ -365,7 +451,7 @@ def fetch_and_sync():
                 latest_period = str(new_df["report_period"][0])
                 if latest_period != old_period:
                     print(f"【发现更新】{name} 发布了 {latest_period} 财报")
-                    send_email(name, symbol, latest_period)
+                    # send_email(name, symbol, latest_period)
                 new_df.to_csv(file_path, index=False)
             else:
                 # 初始化数据

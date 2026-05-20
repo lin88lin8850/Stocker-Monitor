@@ -19,6 +19,8 @@ VALUE_UNIT_METRICS = {
     "pe_ttm": "倍",
     "pb": "倍",
 }
+# 估值类指标：没有年报的年份用当年最新一期季报替代（例如未发布年报的当年用 Q1/Q2/Q3 数据）。
+VALUATION_METRICS = {"pe_ttm", "pb"}
 
 
 def choose_chinese_unit(series: pd.Series) -> tuple[float, str]:
@@ -44,9 +46,24 @@ def prepare_dashboard_data(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     data["report_date"] = pd.to_datetime(data["report_date"], errors="coerce")
     data = data.dropna(subset=["report_date", "metric_name"])
-    data = data[data["report_name"].astype(str).str.contains("年报", na=False)]
     data = data[data["metric_name"].isin(FOCUS_METRICS)]
-    return data
+
+    is_annual = data["report_name"].astype(str).str.contains("年报", na=False)
+    is_valuation = data["metric_name"].isin(VALUATION_METRICS)
+
+    # 估值类指标：按年取 report_date 最新的一行；有年报的年份天然取到年报（12-31 是该年最晚），
+    # 没有年报的年份则回退到当年最新的季报，从而把 2026 Q1（或后续 Q2/Q3）补到图上。
+    valuation_data = data[is_valuation].copy()
+    valuation_data["__year"] = valuation_data["report_date"].dt.year
+    valuation_data = (
+        valuation_data.sort_values("report_date", ascending=False)
+        .drop_duplicates(subset=["metric_name", "__year"], keep="first")
+        .drop(columns="__year")
+    )
+
+    non_valuation_data = data[~is_valuation & is_annual]
+
+    return pd.concat([non_valuation_data, valuation_data], ignore_index=True)
 
 
 def get_metrics(df: pd.DataFrame) -> list[str]:
