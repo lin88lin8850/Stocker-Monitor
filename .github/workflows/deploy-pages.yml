@@ -3,10 +3,16 @@ name: Build and Deploy Dashboard
 on:
   push:
     branches: ["main", "master"]
+    # data/ 由本 workflow 自动提交，不再触发自身（双保险，配合 GITHUB_TOKEN 防递归）。
+    paths-ignore:
+      - "data/**"
   workflow_dispatch:
+  schedule:
+    # 北京时间每天 07:00（UTC 23:00）跑一次；改时区只需调整这里的 cron。
+    - cron: "0 23 * * *"
 
 permissions:
-  contents: read
+  contents: write   # 需要 write 才能把更新后的 data/ 提交回仓库
   pages: write
   id-token: write
 
@@ -20,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -33,6 +41,18 @@ jobs:
         env:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         run: python update_data.py
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No data changes; skipping commit."
+          else
+            git commit -m "chore: update data $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
 
       - name: Build static web page
         run: python build_web.py
