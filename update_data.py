@@ -43,6 +43,54 @@ def report_labels_from_date(report_date: pd.Timestamp) -> tuple[str, str, str]:
     return report_name, report_period, quarter_name
 
 
+def fetch_hk_avg_inventory_map(symbol: str) -> dict[pd.Timestamp, float]:
+    # 东财港股财报明细接口为长表结构，这里提取“存货”并按报告期构造平均存货，
+    # 用于估算存货周转天数。
+    frames: list[pd.DataFrame] = []
+    for indicator in ("年度", "报告期"):
+        try:
+            partial_df = ak.stock_financial_hk_report_em(
+                stock=symbol, symbol="资产负债表", indicator=indicator
+            )
+        except Exception as exc:
+            print(f"港股资产负债表拉取失败 ({symbol}, {indicator}): {exc}")
+            continue
+        if partial_df is not None and not partial_df.empty:
+            frames.append(partial_df)
+
+    if not frames:
+        return {}
+
+    inventory_df = pd.concat(frames, ignore_index=True)
+    inventory_df = inventory_df[inventory_df["STD_ITEM_NAME"] == "存货"].copy()
+    inventory_df["REPORT_DATE"] = pd.to_datetime(
+        inventory_df["REPORT_DATE"], errors="coerce"
+    )
+    inventory_df["AMOUNT"] = pd.to_numeric(inventory_df["AMOUNT"], errors="coerce")
+    inventory_df = (
+        inventory_df.dropna(subset=["REPORT_DATE", "AMOUNT"])
+        .sort_values("REPORT_DATE")
+        .drop_duplicates(subset=["REPORT_DATE"], keep="last")
+    )
+    if inventory_df.empty:
+        return {}
+
+    avg_inventory_map: dict[pd.Timestamp, float] = {}
+    previous_inventory: float | None = None
+    for _, row in inventory_df.iterrows():
+        report_date = row["REPORT_DATE"].normalize()
+        current_inventory = float(row["AMOUNT"])
+        average_inventory = (
+            (current_inventory + previous_inventory) / 2
+            if previous_inventory is not None
+            else current_inventory
+        )
+        avg_inventory_map[report_date] = average_inventory
+        previous_inventory = current_inventory
+
+    return avg_inventory_map
+
+
 def fetch_hk_financial_long(symbol: str) -> pd.DataFrame:
     hk_symbol = normalize_symbol(symbol)
 
@@ -70,6 +118,7 @@ def fetch_hk_financial_long(symbol: str) -> pd.DataFrame:
         .drop_duplicates(subset=["REPORT_DATE"], keep="first")
         .sort_values("REPORT_DATE", ascending=False)
     )
+    avg_inventory_map = fetch_hk_avg_inventory_map(hk_symbol)
 
     metric_mapping = [
         (
@@ -124,6 +173,37 @@ def fetch_hk_financial_long(symbol: str) -> pd.DataFrame:
                     "single": pd.NA,
                     "yoy": yoy,
                     "mom": qoq,
+                    "single_yoy": pd.NA,
+                }
+            )
+
+        # 港股接口没有直接给“存货周转天数”，这里按报告期估算：
+        # 存货周转天数 = 平均存货 / 营业成本 * 报告期天数
+        # 其中营业成本 = 营业总收入 - 毛利。
+        average_inventory = avg_inventory_map.get(report_date.normalize())
+        operate_income = pd.to_numeric(row.get("OPERATE_INCOME"), errors="coerce")
+        gross_profit = pd.to_numeric(row.get("GROSS_PROFIT"), errors="coerce")
+        cogs = operate_income - gross_profit
+        if (
+            average_inventory is not None
+            and pd.notna(operate_income)
+            and pd.notna(gross_profit)
+            and pd.notna(cogs)
+            and cogs > 0
+        ):
+            period_days = int(report_date.dayofyear)
+            inventory_turnover_days = average_inventory / cogs * period_days
+            rows.append(
+                {
+                    "report_date": report_date.strftime("%Y-%m-%d"),
+                    "report_name": report_name,
+                    "report_period": report_period,
+                    "quarter_name": quarter_name,
+                    "metric_name": "inventory_turnover_days",
+                    "value": inventory_turnover_days,
+                    "single": pd.NA,
+                    "yoy": pd.NA,
+                    "mom": pd.NA,
                     "single_yoy": pd.NA,
                 }
             )
