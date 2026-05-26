@@ -12,16 +12,25 @@ from dashboard_core import (
     prepare_dashboard_data,
     validate_required_columns,
 )
+from popmart_store_network import (
+    build_popmart_store_network_plot,
+    load_popmart_store_network_data,
+)
 from utils import (
     COMPANY_SYMBOLS,
     VALUE_LABELS,
 )
 
 DATA_DIR = "data"
+INTERNAL_DATA_FILES = {"popmart_store_network.csv"}
 
 
 def list_company_names() -> list[str]:
-    data_files = [f for f in os.listdir(DATA_DIR) if f.endswith(".csv")]
+    data_files = [
+        f
+        for f in os.listdir(DATA_DIR)
+        if f.endswith(".csv") and f not in INTERNAL_DATA_FILES
+    ]
     if not data_files:
         st.error("未在 data 目录找到 CSV 数据文件。")
         st.stop()
@@ -143,6 +152,13 @@ def main() -> None:
         table_frames.append(
             build_metric_table(metric_df, metric, selected_value_label, selected_value_column)
         )
+
+        # 泡泡玛特专属图放在“存货周转天数”后面，便于结合库存效率一起看渠道扩张。
+        if company_name == "泡泡玛特" and metric == "inventory_turnover_days":
+            network_df = load_popmart_store_network_data()
+            network_fig = build_popmart_store_network_plot(network_df)
+            if network_fig is not None:
+                st.plotly_chart(network_fig, use_container_width=True)
 
     if rendered_metric_count == 0:
         st.warning("当前数值维度下暂无可展示图表。")

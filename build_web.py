@@ -13,11 +13,16 @@ from dashboard_core import (
     prepare_dashboard_data,
     validate_required_columns,
 )
+from popmart_store_network import (
+    build_popmart_store_network_plot,
+    load_popmart_store_network_data,
+)
 from utils import COMPANY_SYMBOLS, VALUE_LABELS
 
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("docs")
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
+INTERNAL_DATA_FILES = {"popmart_store_network.csv"}
 BASE_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -225,7 +230,9 @@ def load_company_data(csv_file: Path) -> tuple[pd.DataFrame, str, list[str]]:
     return df, get_display_name(csv_file.stem), validate_required_columns(df)
 
 
-def build_metric_block(df: pd.DataFrame, metrics: list[str], value_column: str) -> str:
+def build_metric_block(
+    df: pd.DataFrame, metrics: list[str], value_column: str, company_name: str
+) -> str:
     value_label = VALUE_LABELS.get(value_column, value_column)
     chart_blocks: list[str] = []
     table_frames: list[pd.DataFrame] = []
@@ -239,6 +246,13 @@ def build_metric_block(df: pd.DataFrame, metrics: list[str], value_column: str) 
         table_frames.append(
             build_metric_table(metric_df, metric, value_label, value_column)
         )
+
+        # 泡泡玛特专属图放在“存货周转天数”后面。
+        if company_name == "泡泡玛特" and metric == "inventory_turnover_days":
+            network_df = load_popmart_store_network_data()
+            network_fig = build_popmart_store_network_plot(network_df)
+            if network_fig is not None:
+                chart_blocks.append(network_fig.to_html(full_html=False, include_plotlyjs="cdn"))
 
     if not chart_blocks:
         return ""
@@ -261,7 +275,7 @@ def build_combo_section(
     if not metrics:
         return ""
 
-    metric_block = build_metric_block(df, metrics, value_column)
+    metric_block = build_metric_block(df, metrics, value_column, company_name)
     if not metric_block:
         return ""
 
@@ -330,7 +344,11 @@ def build_company_sections(
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_map = {csv_file.stem: csv_file for csv_file in DATA_DIR.glob("*.csv")}
+    csv_map = {
+        csv_file.stem: csv_file
+        for csv_file in DATA_DIR.glob("*.csv")
+        if csv_file.name not in INTERNAL_DATA_FILES
+    }
     csv_files = [
         csv_map[company] for company in COMPANY_SYMBOLS.keys() if company in csv_map
     ]
