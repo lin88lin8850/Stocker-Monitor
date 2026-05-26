@@ -14,7 +14,10 @@ from dashboard_core import (
     validate_required_columns,
 )
 from popmart_store_network import (
+    build_popmart_member_count_plot,
+    build_popmart_repeat_rate_plot,
     build_popmart_store_network_plot,
+    load_popmart_member_metrics_data,
     load_popmart_store_network_data,
 )
 from utils import COMPANY_SYMBOLS, VALUE_LABELS
@@ -22,7 +25,7 @@ from utils import COMPANY_SYMBOLS, VALUE_LABELS
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("docs")
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
-INTERNAL_DATA_FILES = {"popmart_store_network.csv"}
+INTERNAL_DATA_FILES = {"popmart_store_network.csv", "popmart_member_metrics.csv"}
 BASE_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -253,6 +256,17 @@ def build_metric_block(
             network_fig = build_popmart_store_network_plot(network_df)
             if network_fig is not None:
                 chart_blocks.append(network_fig.to_html(full_html=False, include_plotlyjs="cdn"))
+            member_df = load_popmart_member_metrics_data()
+            member_count_fig = build_popmart_member_count_plot(member_df)
+            if member_count_fig is not None:
+                chart_blocks.append(
+                    member_count_fig.to_html(full_html=False, include_plotlyjs="cdn")
+                )
+            repeat_rate_fig = build_popmart_repeat_rate_plot(member_df)
+            if repeat_rate_fig is not None:
+                chart_blocks.append(
+                    repeat_rate_fig.to_html(full_html=False, include_plotlyjs="cdn")
+                )
 
     if not chart_blocks:
         return ""

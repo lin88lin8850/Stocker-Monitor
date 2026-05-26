@@ -13,7 +13,10 @@ from dashboard_core import (
     validate_required_columns,
 )
 from popmart_store_network import (
+    build_popmart_member_count_plot,
+    build_popmart_repeat_rate_plot,
     build_popmart_store_network_plot,
+    load_popmart_member_metrics_data,
     load_popmart_store_network_data,
 )
 from utils import (
@@ -22,7 +25,7 @@ from utils import (
 )
 
 DATA_DIR = "data"
-INTERNAL_DATA_FILES = {"popmart_store_network.csv"}
+INTERNAL_DATA_FILES = {"popmart_store_network.csv", "popmart_member_metrics.csv"}
 
 
 def list_company_names() -> list[str]:
@@ -159,6 +162,13 @@ def main() -> None:
             network_fig = build_popmart_store_network_plot(network_df)
             if network_fig is not None:
                 st.plotly_chart(network_fig, use_container_width=True)
+            member_df = load_popmart_member_metrics_data()
+            member_count_fig = build_popmart_member_count_plot(member_df)
+            if member_count_fig is not None:
+                st.plotly_chart(member_count_fig, use_container_width=True)
+            repeat_rate_fig = build_popmart_repeat_rate_plot(member_df)
+            if repeat_rate_fig is not None:
+                st.plotly_chart(repeat_rate_fig, use_container_width=True)
 
     if rendered_metric_count == 0:
         st.warning("当前数值维度下暂无可展示图表。")
