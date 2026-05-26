@@ -479,24 +479,194 @@ def build_valuation_rows(
     return pd.DataFrame(rows)
 
 
+def fetch_a_share_cashflow_df(symbol: str) -> pd.DataFrame:
+    market_symbol = f"sh{symbol}" if str(symbol).startswith("6") else f"sz{symbol}"
+    try:
+        cf_df = ak.stock_financial_report_sina(stock=market_symbol, symbol="现金流量表")
+    except Exception as exc:
+        print(f"A股现金流量表拉取失败 ({symbol}): {exc}")
+        return pd.DataFrame()
+
+    cfo_col_candidates = [
+        "经营活动产生的现金流量净额",
+        "经营活动现金流量净额",
+    ]
+    capex_col_candidates = [
+        "购建固定资产、无形资产和其他长期资产所支付的现金",
+        "购建固定资产、无形资产和其他长期资产支付的现金",
+    ]
+    cfo_col = next((col for col in cfo_col_candidates if col in cf_df.columns), None)
+    capex_col = next((col for col in capex_col_candidates if col in cf_df.columns), None)
+    if "报告日" not in cf_df.columns or not cfo_col or not capex_col:
+        return pd.DataFrame()
+
+    result_df = cf_df[["报告日", cfo_col, capex_col]].copy()
+    result_df.columns = ["report_date", "operating_cashflow", "capex"]
+    result_df["report_date"] = pd.to_datetime(result_df["report_date"], errors="coerce")
+    result_df["operating_cashflow"] = pd.to_numeric(
+        result_df["operating_cashflow"], errors="coerce"
+    )
+    result_df["capex"] = pd.to_numeric(result_df["capex"], errors="coerce")
+    result_df = result_df.dropna(subset=["report_date", "operating_cashflow", "capex"])
+    result_df["report_date"] = result_df["report_date"].dt.normalize()
+    result_df = (
+        result_df.sort_values("report_date")
+        .drop_duplicates(subset=["report_date"], keep="last")
+        .reset_index(drop=True)
+    )
+    return result_df
+
+
+def fetch_hk_cashflow_df(symbol: str) -> pd.DataFrame:
+    hk_symbol = normalize_symbol(symbol)
+    frames: list[pd.DataFrame] = []
+    for indicator in ("年度", "报告期"):
+        try:
+            part_df = ak.stock_financial_hk_report_em(
+                stock=hk_symbol, symbol="现金流量表", indicator=indicator
+            )
+        except Exception as exc:
+            print(f"港股现金流量表拉取失败 ({hk_symbol}, {indicator}): {exc}")
+            continue
+        if part_df is not None and not part_df.empty:
+            frames.append(part_df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    raw_df = pd.concat(frames, ignore_index=True)
+    raw_df["REPORT_DATE"] = pd.to_datetime(raw_df["REPORT_DATE"], errors="coerce")
+    raw_df["AMOUNT"] = pd.to_numeric(raw_df["AMOUNT"], errors="coerce")
+    raw_df = raw_df.dropna(subset=["REPORT_DATE", "STD_ITEM_NAME", "AMOUNT"])
+    raw_df["REPORT_DATE"] = raw_df["REPORT_DATE"].dt.normalize()
+
+    cfo_items = {
+        "经营业务现金净额",
+        "经营活动所得现金净额",
+        "经营活动产生的现金流量净额",
+        "经营活动现金净流量",
+    }
+    capex_items = {
+        "购建固定资产",
+        "购建无形资产及其他资产",
+        "购建固定资产、无形资产和其他长期资产支付的现金",
+    }
+
+    cfo_df = (
+        raw_df[raw_df["STD_ITEM_NAME"].isin(cfo_items)]
+        .groupby("REPORT_DATE", as_index=False)["AMOUNT"]
+        .sum()
+        .rename(columns={"REPORT_DATE": "report_date", "AMOUNT": "operating_cashflow"})
+    )
+    capex_df = (
+        raw_df[raw_df["STD_ITEM_NAME"].isin(capex_items)]
+        .groupby("REPORT_DATE", as_index=False)["AMOUNT"]
+        .sum()
+        .rename(columns={"REPORT_DATE": "report_date", "AMOUNT": "capex"})
+    )
+
+    if cfo_df.empty or capex_df.empty:
+        return pd.DataFrame()
+
+    result_df = cfo_df.merge(capex_df, on="report_date", how="inner")
+    result_df = (
+        result_df.sort_values("report_date")
+        .drop_duplicates(subset=["report_date"], keep="last")
+        .reset_index(drop=True)
+    )
+    return result_df
+
+
+def build_fcf_ratio_rows(financial_df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    if financial_df.empty:
+        return pd.DataFrame()
+
+    net_profit_df = financial_df[financial_df["metric_name"] == "parent_holder_net_profit"][
+        ["report_date", "value"]
+    ].copy()
+    net_profit_df["report_date"] = pd.to_datetime(
+        net_profit_df["report_date"], errors="coerce"
+    )
+    net_profit_df["value"] = pd.to_numeric(net_profit_df["value"], errors="coerce")
+    net_profit_df = net_profit_df.dropna(subset=["report_date", "value"]).rename(
+        columns={"value": "net_profit"}
+    )
+    if net_profit_df.empty:
+        return pd.DataFrame()
+    net_profit_df["report_date"] = net_profit_df["report_date"].dt.normalize()
+    net_profit_df = net_profit_df.drop_duplicates(subset=["report_date"], keep="last")
+
+    cashflow_df = fetch_hk_cashflow_df(symbol) if is_hk_symbol(symbol) else fetch_a_share_cashflow_df(symbol)
+    if cashflow_df.empty:
+        return pd.DataFrame()
+
+    report_meta = (
+        financial_df[["report_date", "report_name", "report_period", "quarter_name"]]
+        .drop_duplicates("report_date")
+        .copy()
+    )
+    report_meta["report_date"] = pd.to_datetime(report_meta["report_date"], errors="coerce")
+    report_meta["report_date"] = report_meta["report_date"].dt.normalize()
+
+    merged = (
+        report_meta.merge(net_profit_df, on="report_date", how="inner")
+        .merge(cashflow_df, on="report_date", how="inner")
+        .drop_duplicates(subset=["report_date"], keep="first")
+    )
+    merged = merged[merged["net_profit"] != 0]
+    if merged.empty:
+        return pd.DataFrame()
+
+    merged["free_cashflow"] = merged["operating_cashflow"] - merged["capex"]
+    merged["fcf_to_net_profit_ratio"] = merged["free_cashflow"] / merged["net_profit"]
+    merged = merged.replace([float("inf"), float("-inf")], pd.NA).dropna(
+        subset=["fcf_to_net_profit_ratio"]
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    rows: list[dict] = []
+    for _, row in merged.iterrows():
+        rows.append(
+            {
+                "report_date": row["report_date"].strftime("%Y-%m-%d"),
+                "report_name": row["report_name"],
+                "report_period": row["report_period"],
+                "quarter_name": row["quarter_name"],
+                "metric_name": "fcf_to_net_profit_ratio",
+                "value": row["fcf_to_net_profit_ratio"],
+                "single": pd.NA,
+                "yoy": pd.NA,
+                "mom": pd.NA,
+                "single_yoy": pd.NA,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def enrich_financial_with_valuation(
     financial_df: pd.DataFrame, symbol: str
 ) -> pd.DataFrame:
+    fcf_ratio_rows_df = build_fcf_ratio_rows(financial_df, symbol)
     valuation_raw_df = fetch_valuation_history(symbol)
     valuation_df = normalize_valuation_df(valuation_raw_df)
     valuation_rows_df = build_valuation_rows(financial_df, valuation_df)
 
-    if valuation_rows_df.empty:
+    # Remove old derived rows to avoid duplicates on repeated sync.
+    base_df = financial_df[
+        ~financial_df["metric_name"].isin(
+            ["pe_ttm", "pb", "fcf_to_net_profit_ratio"]
+        )
+    ].copy()
+    extra_frames = [df for df in [fcf_ratio_rows_df, valuation_rows_df] if not df.empty]
+    if not extra_frames:
         return financial_df
+    enriched_df = pd.concat([base_df] + extra_frames, ignore_index=True)
 
-    # Remove old valuation rows to avoid duplicates on repeated sync.
-    base_df = financial_df[~financial_df["metric_name"].isin(["pe_ttm", "pb"])].copy()
-    enriched_df = pd.concat([base_df, valuation_rows_df], ignore_index=True)
-
-    metric_order = base_df["metric_name"].dropna().drop_duplicates().tolist() + [
-        "pe_ttm",
-        "pb",
-    ]
+    metric_order = (
+        base_df["metric_name"].dropna().drop_duplicates().tolist()
+        + ["fcf_to_net_profit_ratio", "pe_ttm", "pb"]
+    )
     metric_order = list(dict.fromkeys(metric_order))
     enriched_df["metric_name"] = pd.Categorical(
         enriched_df["metric_name"], categories=metric_order, ordered=True

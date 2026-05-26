@@ -18,6 +18,7 @@ VALUE_UNIT_METRICS = {
     "basic_eps": "元",
     "pe_ttm": "倍",
     "pb": "倍",
+    "fcf_to_net_profit_ratio": "倍",
 }
 # 估值类指标：没有年报的年份用当年最新一期季报替代（例如未发布年报的当年用 Q1/Q2/Q3 数据）。
 VALUATION_METRICS = {"pe_ttm", "pb"}

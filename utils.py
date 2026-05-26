@@ -36,6 +36,7 @@ METRIC_LABELS = {
     "index_weighted_avg_roe": "加权平均净资产收益率",
     "pe_ttm": "市盈率(PE-TTM)",
     "pb": "市净率(PB)",
+    "fcf_to_net_profit_ratio": "自由现金流/净利润比值",
 }
 
 VALUE_LABELS = {
@@ -54,6 +55,7 @@ FOCUS_METRICS = [
     "basic_eps",
     "assets_debt_ratio",
     "index_weighted_avg_roe",
+    "fcf_to_net_profit_ratio",
     "inventory_turnover_days",
 ]
 
