@@ -48,6 +48,14 @@ def build_popmart_store_network_plot(network_df: pd.DataFrame):
                     "value": float(row["roboshops"]),
                 }
             )
+        for _, row in global_df.dropna(subset=["standard_stores", "roboshops"]).iterrows():
+            rows.append(
+                {
+                    "report_date": row["report_date"],
+                    "series": "全球总网点数量（标准店+机器人店）",
+                    "value": float(row["standard_stores"] + row["roboshops"]),
+                }
+            )
 
     plot_df = pd.DataFrame(rows)
     if plot_df.empty:
